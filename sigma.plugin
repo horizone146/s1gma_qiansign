@@ -1,0 +1,23 @@
+#!name = 适马小程序自动签到
+#!desc = 适马(Sigma)小程序自动签到+转发文章刷积分。打开小程序后5分钟内自动完成当日任务，token自动捕获，含防画像伪装
+#!author = custom
+#!icon = https://simplesat.io/wp-content/uploads/2021/11/Sigma-logo.png
+#!tag = 签到,积分
+#!type = normal
+#!system = iOS,iPadOS
+#!loon_version = 3.5.0(969)
+
+[Argument]
+每日积分上限 = input,"120",tag=每日积分上限,desc=当日获得积分达到该值后停止
+单轮最大转发 = input,"10",tag=单轮最大转发,desc=每次运行最多转发次数
+随机休息日 = switch,false,tag=随机休息,desc=约10%的天数自动休息，降低行为画像（会少拿积分）
+cron表达式 = input,"*/5 * * * *",tag=运行频率,desc=主任务执行周期
+启用任务 = switch,true,tag=启用主任务,desc=关闭后仅捕获token
+
+[Script]
+http-request ^https?:\/\/sigmaapi\.mad-sea\.com\/Api\/ script-path=sigma-token.js, tag=适马Token捕获, enable=true
+
+cron {cron表达式} script-path=sigma-task.js,timeout=600,tag=适马每日任务,argument=[{每日积分上限},{单轮最大转发},{随机休息}],enable={启用任务}
+
+[Mitm]
+hostname = sigmaapi.mad-sea.com
