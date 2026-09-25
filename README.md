@@ -17,10 +17,13 @@
 
 ## 安装
 
-1. 把 `sigma-token.js`、`sigma-task.js` 放入 Loon 脚本目录（或托管到任意 URL，修改插件中的 `script-path`）
-2. Loon → 配置 → 插件 → 导入 `sigma.plugin`
-3. Loon → 配置 → MITM → 安装并信任 CA 证书（iOS：设置 → 通用 → VPN与设备管理 → 安装；关于本机 → 证书信任设置 → 完全信任）
-4. 打开一次适马小程序，看到「Token 已更新」通知即部署成功
+> 需要 Loon **3.5.1 (983)+**（新版 Script v2 语法）
+
+1. iPhone Safari 访问一键导入：
+   `loon://import?plugin=https://raw.githubusercontent.com/horizone146/s1gma_qiansign/main/sigma.plugin`
+   （或在 Loon → 配置 → 插件 → ➕ 粘贴该 raw 链接）
+2. Loon → 配置 → MITM → 安装并信任 CA 证书（iOS：设置 → 通用 → VPN与设备管理 → 安装；关于本机 → 证书信任设置 → 完全信任）
+3. 打开一次适马小程序，看到「Token 已更新」通知即部署成功；之后每天打开小程序，5 分钟内自动完成当日任务
 
 ## 插件参数
 
