@@ -92,8 +92,8 @@ if (!tObj) {
   const fresh = st.token !== tObj.token; // token 换新 = 刚打开过小程序
   const expMs = tokenExpMs(tObj.token);
 
-  // 无网络快速退出：已完成 / token 已过期
-  if (st.done && !fresh) $done();
+  // 无网络快速退出：当日已完整跑过一轮 / token 已过期
+  if (st.done) $done();
   if (expMs && Date.now() > expMs && !fresh) $done();
   // 休息日：约10%概率，什么都不做也不标记
   if (REST_DAY && !st.done && dateHash(today) % 10 === 0) $done();
@@ -224,12 +224,12 @@ if (!tObj) {
 
     st.lastIdx = idx >= articles.length ? 0 : idx;
     st.token = tObj.token;
-    if (earned >= DAILY_TARGET) st.done = true;
+    // 每天只完整跑一轮：无论是否刷满上限，跑完即标记完成
+    st.done = true;
     $persistentStore.write(JSON.stringify(st), KEY_STATE);
 
-    const msg = earned >= DAILY_TARGET
-      ? "今日 +" + earned + " 已达上限 ✅ 共转发 " + st.shares + " 次"
-      : "本轮 +" + earned + "/" + DAILY_TARGET + "（下轮继续）";
+    const msg = "今日 +" + earned + "/" + DAILY_TARGET
+      + " ✅ 签到+转发 " + st.shares + " 次已执行";
     finish(msg);
   })();
 }
