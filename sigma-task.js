@@ -92,8 +92,8 @@ if (!tObj) {
   const fresh = st.token !== tObj.token; // token 换新 = 刚打开过小程序
   const expMs = tokenExpMs(tObj.token);
 
-  // 无网络快速退出：当日已完整跑过一轮 / token 已过期
-  if (st.done) $done();
+  // 无网络快速退出：已完成 / token 已过期
+  if (st.done && !fresh) $done();
   if (expMs && Date.now() > expMs && !fresh) $done();
   // 休息日：约10%概率，什么都不做也不标记
   if (REST_DAY && !st.done && dateHash(today) % 10 === 0) $done();
@@ -174,40 +174,62 @@ if (!tObj) {
     }
     if (!articles.length) return finish("文章列表为空，中止");
 
-    // ---- 转发 1 篇：先点开文章(GetDetails=阅读)再转发 ----
-    // 实测：转发积分每日仅第一次有效(+20)，多转无效，故只转一篇
+    // ---- 转发刷分：先点开文章(GetDetails=阅读)再转发 ----
+    let noGain = 0;
+    let roundShares = 0;
     let idx = st.lastIdx || 0;
-    if (idx >= articles.length) idx = 0;
-    const id = articles[idx][0];
-    const title = articles[idx][1];
-    st.lastIdx = (idx + 1) % articles.length;
-    try {
-      // 模拟点开文章（产生一次真实阅读上报）
-      await api("POST", "/Api/Article/GetDetails", { id: id });
-      await sleep(ri(6000, 16000)); // 模拟阅读
-      const r = await api("POST", "/Api/Article/Shares", {
-        WorkID: id,
-        WorkTitle: title,
-        nickname: user.nickname,
-      });
-      st.shares++;
-      console.log("转发 " + title + " => code=" + r.code);
-    } catch (e) {
-      console.log("转发失败: " + e.message);
-    }
-    await sleep(ri(4000, 9000));
 
+    while (earned < DAILY_TARGET && roundShares < MAX_SHARES_PER_RUN && idx < articles.length) {
+      const id = articles[idx][0];
+      const title = articles[idx][1];
+      idx++;
+      try {
+        // 模拟点开文章（产生一次真实阅读上报）
+        await api("POST", "/Api/Article/GetDetails", { id: id });
+        await sleep(ri(6000, 16000)); // 模拟阅读
+        const r = await api("POST", "/Api/Article/Shares", {
+          WorkID: id,
+          WorkTitle: title,
+          nickname: user.nickname,
+        });
+        st.shares++;
+        roundShares++;
+        console.log("转发[" + st.shares + "] " + title + " => code=" + r.code);
+        if (r.code !== 0) {
+          console.log("转发被拒: " + r.msg);
+          noGain++;
+          if (noGain >= 3) break;
+        }
+      } catch (e) {
+        console.log("转发失败: " + e.message);
+        break;
+      }
+      await sleep(ri(8000, 20000));
+
+      try {
+        const u2 = (await api("GET", "/Api/Users/GetUserInfo")).data;
+        const now = u2.points_total;
+        if (now === st.baseline + earned) {
+          noGain++;
+          if (noGain >= 2) { console.log("连续无增长，停止"); break; }
+        } else {
+          earned = now - st.baseline;
+          noGain = 0;
+          console.log("进度 +" + earned + "/" + DAILY_TARGET);
+        }
+      } catch (e) {
+        break;
+      }
+    }
+
+    st.lastIdx = idx >= articles.length ? 0 : idx;
     st.token = tObj.token;
-    // 每天只完整跑一轮：无论积分是否到手，跑完即标记完成
-    st.done = true;
+    if (earned >= DAILY_TARGET) st.done = true;
     $persistentStore.write(JSON.stringify(st), KEY_STATE);
 
-    // 最终积分
-    let gained = "?";
-    try {
-      const u3 = (await api("GET", "/Api/Users/GetUserInfo")).data;
-      gained = "+" + (u3.points_total - st.baseline);
-    } catch (e) {}
-    finish("今日任务完成，积分 " + gained + "（签到5+转发20为满额25）");
+    const msg = earned >= DAILY_TARGET
+      ? "今日 +" + earned + " 已达上限 ✅ 共转发 " + st.shares + " 次"
+      : "本轮 +" + earned + "/" + DAILY_TARGET + "（下轮继续）";
+    finish(msg);
   })();
 }
