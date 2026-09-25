@@ -17,7 +17,7 @@ cron表达式 = input,"*/5 * * * *",tag=运行频率,desc=主任务执行周期
 [Script]
 http-request ^https?:\/\/sigmaapi\.mad-sea\.com\/Api\/ script-path=https://raw.githubusercontent.com/horizone146/s1gma_qiansign/main/sigma-token.js, tag=适马Token捕获, enable=true
 
-cron {cron表达式} script-path=https://raw.githubusercontent.com/horizone146/s1gma_qiansign/main/sigma-task.js,timeout=600,tag=适马每日任务,argument=[{每日积分上限},{单轮最大转发},{随机休息}],enable={启用任务}
+cron "{cron表达式}" script-path=https://raw.githubusercontent.com/horizone146/s1gma_qiansign/main/sigma-task.js,timeout=600,tag=适马每日任务,argument=[{每日积分上限},{单轮最大转发},{随机休息}],enable={启用任务}
 
 [Mitm]
 hostname = sigmaapi.mad-sea.com
