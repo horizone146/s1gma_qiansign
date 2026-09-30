@@ -19,16 +19,20 @@ const today = new Date().toISOString().slice(0, 10);
 function notify(sub, body) {
   $notification.post("适马任务", sub || "", body || "");
 }
+function quitLog(reason) {
+  console.log("EXIT: " + reason);
+  $done();
+}
 function ri(min, max) { return min + Math.floor(Math.random() * (max - min)); }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function readTokenObj() {
   try {
     const o = JSON.parse($persistentStore.read(KEY_TOKEN) || "");
-    if (o && o.token) return { token: o.token, ua: o.ua || FALLBACK_UA };
+    if (o && o.token) return { token: o.token, ua: o.ua || FALLBACK_UA, ts: o.ts || 0, burstStart: o.burstStart || 0 };
   } catch (e) {}
   const legacy = $persistentStore.read(KEY_TOKEN);
-  return legacy ? { token: legacy, ua: FALLBACK_UA } : null;
+  return legacy ? { token: legacy, ua: FALLBACK_UA, ts: 0, burstStart: 0 } : null;
 }
 
 const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -67,15 +71,18 @@ function getTodayState() {
 
 const tObj = readTokenObj();
 if (!tObj) {
-  // 没有 token：静默退出（连小程序都没打开过，无需打扰）
-  $done();
+  // 没有 token：从未捕获过（重装插件/清数据后需要先打开一次小程序）
+  quitLog("存储中无 token（请先打开一次适马小程序）");
 } else {
   const st = getTodayState();
-  const fresh = st.token !== tObj.token; // token 换新 = 刚打开过小程序
   const expMs = tokenExpMs(tObj.token);
+  console.log("START: state(date=" + st.date + " runs=" + st.runs + " signed=" + st.signed
+    + " burst=" + String(st.last_burst_start).slice(0, 10) + ") | token捕获于 "
+    + (tObj.ts ? new Date(tObj.ts).toLocaleString() : "未知时间")
+    + " | 过期于 " + (expMs ? new Date(expMs).toLocaleString() : "未知"));
 
-  // ---- 无动作退出（全部静默，不发通知不标完成）----
-  if (REST_DAY && dateHash(today) % 10 === 0) $done();
+  // ---- 无动作退出（每条都会在 log 里写明原因）----
+  if (REST_DAY && dateHash(today) % 10 === 0) quitLog("今天是随机休息日，跳过");
   // token 过期：若上次没提醒过这个 token，提醒一次然后记住
   if (expMs && Date.now() > expMs) {
     if (st.expired_notified !== tObj.token) {
@@ -83,12 +90,14 @@ if (!tObj) {
       $persistentStore.write(JSON.stringify(st), KEY_STATE);
       notify("Token 已过期", "请打开适马小程序刷新，之后任务自动继续");
     }
-    $done();
+    quitLog("Token 已过期（过期时间 " + new Date(expMs).toLocaleString() + "），请打开小程序刷新");
   }
   // ---- 一波只执行一次 ----
   // token 脚本把相隔5分钟内的连续捕获归为同一"波"（burstStart 为波起点）。
   // 检测到新波（burstStart 变化）→ 执行一轮；同一波内后续 token 变化全部忽略。
-  if (st.last_burst_start === tObj.burstStart && !st.retry) $done();
+  if (st.last_burst_start === tObj.burstStart && !st.retry) {
+    quitLog("当前捕获波已执行过（波起点 " + new Date(tObj.burstStart).toLocaleString() + "），静默跳过");
+  }
 
   const headers = {
     "Authorization": "Bearer " + tObj.token,
