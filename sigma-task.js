@@ -12,7 +12,7 @@ const FALLBACK_UA =
 
 const arg = $argument || {};
 const SHARE_COUNT = parseInt(arg.share_count, 10) || 6;   // 每轮转发篇数
-const REST_DAY = arg.rest_day === true || arg.rest_day === "true";
+const SHARE_DELAY = parseInt(arg.share_delay, 10) || 5;   // 转发间隔基准秒数，实际随机 delay~delay*2
 
 const today = new Date().toISOString().slice(0, 10);
 
@@ -55,11 +55,6 @@ function tokenExpMs(token) {
     return 0;
   }
 }
-function dateHash(s) {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-  return h;
-}
 function getTodayState() {
   try {
     const st = JSON.parse($persistentStore.read(KEY_STATE) || "{}");
@@ -82,7 +77,6 @@ if (!tObj) {
     + " | 过期于 " + (expMs ? new Date(expMs).toLocaleString() : "未知"));
 
   // ---- 无动作退出（每条都会在 log 里写明原因）----
-  if (REST_DAY && dateHash(today) % 10 === 0) quitLog("今天是随机休息日，跳过");
   // token 过期：若上次没提醒过这个 token，提醒一次然后记住
   if (expMs && Date.now() > expMs) {
     if (st.expired_notified !== tObj.token) {
@@ -200,7 +194,7 @@ if (!tObj) {
       idx++; done++;
       try {
         await api("POST", "/Api/Article/GetDetails", { id: id }); // 模拟点开阅读
-        await sleep(ri(6000, 16000));
+        await sleep(ri(SHARE_DELAY * 1000, SHARE_DELAY * 2000));
         const r = await api("POST", "/Api/Article/Shares", {
           WorkID: id,
           WorkTitle: title,
@@ -229,7 +223,7 @@ if (!tObj) {
         }
         break;
       }
-      await sleep(ri(8000, 20000));
+      await sleep(ri(SHARE_DELAY * 1000, SHARE_DELAY * 2000));
     }
     st.lastIdx = idx % articles.length;
 

@@ -1,23 +1,23 @@
 #!name = 适马小程序自动签到
-#!desc = 适马(Sigma)小程序自动签到+转发文章。打开小程序后5分钟内自动执行：签到+转发6篇。token自动捕获，每天只跑一轮
+#!desc = 适马(Sigma)小程序自动签到+转发文章。打开小程序后5分钟内自动执行：签到+转发6篇。token自动捕获，捕获分波防抖
 #!author = horizone146
 #!icon = https://simplesat.io/wp-content/uploads/2021/11/Sigma-logo.png
 #!tag = 签到,积分
 #!type = normal
 #!system = iOS,iPadOS
 #!loon_version = 3.5.1(983)
-#!date = 2026-09-26
+#!date = 2026-09-29
 
 [Argument]
 share_count = input,"6",tag=转发篇数,desc=每次任务转发文章数量
-rest_day = switch,false,tag=随机休息日,desc=约10%的天数自动休息，降低行为画像（会少拿积分）
+share_delay = input,"5",tag=转发间隔秒,desc=相邻转发间隔随机 delay~2倍delay 秒
 cron_expr = input,"*/5 * * * *",tag=运行频率,desc=主任务执行周期
 enabled = switch,true,tag=启用主任务,desc=关闭后仅捕获token
 
 [Script]
 request if ${url} ~= /^https?:\/\/sigmaapi\.mad-sea\.com\/Api\//i then script("https://raw.githubusercontent.com/horizone146/s1gma_qiansign/main/sigma-token.js") with tag="适马Token捕获"
 
-cron ${cron_expr} then script("https://raw.githubusercontent.com/horizone146/s1gma_qiansign/main/sigma-task.js", {${share_count}, ${rest_day}}) with enable=${enabled}, tag="适马每日任务", timeout=600
+cron ${cron_expr} then script("https://raw.githubusercontent.com/horizone146/s1gma_qiansign/main/sigma-task.js", {${share_count}, ${share_delay}}) with enable=${enabled}, tag="适马每日任务", timeout=600
 
 [MitM]
 hostname = sigmaapi.mad-sea.com
