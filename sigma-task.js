@@ -85,8 +85,13 @@ if (!tObj) {
     }
     $done();
   }
-  // 触发条件：今天还没跑过一轮（token 无论刷新多少次），或上一轮异常待重试；否则静默退出
-  if (st.runs > 0 && !st.retry) $done();
+  // ---- 防抖：一次打开小程序会连续捕获多次 token ----
+  // 条件：token 距上次执行有变化，且最后一次捕获已平静超过 2 分钟 → 才执行
+  // 否则静默退出，等下一个 cron 周期
+  const DEBOUNCE_MS = 2 * 60 * 1000;
+  const lastCapture = tObj.ts || 0;
+  if (st.token === tObj.token && !st.retry) $done();          // token 没变，无需执行
+  if (lastCapture && Date.now() - lastCapture < DEBOUNCE_MS) $done(); // 捕获波未结束，等一等
 
   const headers = {
     "Authorization": "Bearer " + tObj.token,
