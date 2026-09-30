@@ -85,8 +85,8 @@ if (!tObj) {
     }
     $done();
   }
-  // 触发条件：新 token，或上一轮异常结束需要重试；否则静默退出
-  if (!fresh && !st.retry) $done();
+  // 触发条件：今天还没跑过一轮（token 无论刷新多少次），或上一轮异常待重试；否则静默退出
+  if (st.runs > 0 && !st.retry) $done();
 
   const headers = {
     "Authorization": "Bearer " + tObj.token,
