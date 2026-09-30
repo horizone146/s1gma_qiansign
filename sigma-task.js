@@ -85,13 +85,10 @@ if (!tObj) {
     }
     $done();
   }
-  // ---- 防抖：一次打开小程序会连续捕获多次 token ----
-  // 条件：token 距上次执行有变化，且最后一次捕获已平静超过 2 分钟 → 才执行
-  // 否则静默退出，等下一个 cron 周期
-  const DEBOUNCE_MS = 2 * 60 * 1000;
-  const lastCapture = tObj.ts || 0;
-  if (st.token === tObj.token && !st.retry) $done();          // token 没变，无需执行
-  if (lastCapture && Date.now() - lastCapture < DEBOUNCE_MS) $done(); // 捕获波未结束，等一等
+  // ---- 一波只执行一次 ----
+  // token 脚本把相隔5分钟内的连续捕获归为同一"波"（burstStart 为波起点）。
+  // 检测到新波（burstStart 变化）→ 执行一轮；同一波内后续 token 变化全部忽略。
+  if (st.last_burst_start === tObj.burstStart && !st.retry) $done();
 
   const headers = {
     "Authorization": "Bearer " + tObj.token,
@@ -232,6 +229,7 @@ if (!tObj) {
     function end() {
       st.runs++;
       st.token = tObj.token;
+      st.last_burst_start = tObj.burstStart; // 标记这波已处理
       st.retry = retryable;      // 异常结束 → 下个周期重试；正常结束 → false
       $persistentStore.write(JSON.stringify(st), KEY_STATE);
       const body = lines.join("\n") + "\n——\n结束: " + stopReason
