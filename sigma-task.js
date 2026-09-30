@@ -1,6 +1,6 @@
-// 适马小程序 - 每日签到 + 转发6篇（cron 驱动，不计分数版）
-// 新 token（刚打开过小程序）→ 短随机延迟 → 签到 + 转发6篇 → 当日完成
-// 每天只执行一轮：跑完标记 done，之后所有 cron 触发直接退出
+// 适马小程序 - 签到(每日一次) + 转发6篇(每轮) 详细报错版
+// 触发条件：token 刷新（打开小程序）或上一轮异常结束待重试
+// 每一步的结果都记录在通知里；静默跳过不发通知，发通知必有执行内容
 const BASE = "https://sigmaapi.mad-sea.com";
 const KEY_TOKEN = "sigma_token";
 const KEY_STATE = "sigma_state";
@@ -11,18 +11,13 @@ const FALLBACK_UA =
   "UnifiedPCWindowsWechat(0xf2541d41) XWEB/25560";
 
 const arg = $argument || {};
-const SHARE_COUNT = parseInt(arg.share_count, 10) || 6;   // 转发篇数
+const SHARE_COUNT = parseInt(arg.share_count, 10) || 6;   // 每轮转发篇数
 const REST_DAY = arg.rest_day === true || arg.rest_day === "true";
 
 const today = new Date().toISOString().slice(0, 10);
 
 function notify(sub, body) {
-  $notification.post("适马签到", sub || "", body || "");
-}
-function finish(msg) {
-  if (msg) notify("", msg);
-  console.log("DONE: " + (msg || ""));
-  $done();
+  $notification.post("适马任务", sub || "", body || "");
 }
 function ri(min, max) { return min + Math.floor(Math.random() * (max - min)); }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -66,20 +61,32 @@ function getTodayState() {
     const st = JSON.parse($persistentStore.read(KEY_STATE) || "{}");
     if (st.date === today) return st;
   } catch (e) {}
-  return { date: today, done: false, shares: 0 };
+  // 每日重置：签到机会刷新
+  return { date: today, signed: false, runs: 0, shares_total: 0, lastIdx: 0, token: "", retry: false, expired_notified: "" };
 }
 
 const tObj = readTokenObj();
 if (!tObj) {
-  finish("未捕获到 token，请先打开适马小程序");
+  // 没有 token：静默退出（连小程序都没打开过，无需打扰）
+  $done();
 } else {
   const st = getTodayState();
+  const fresh = st.token !== tObj.token; // token 换新 = 刚打开过小程序
   const expMs = tokenExpMs(tObj.token);
 
-  // 当日已完成 / token 已过期：直接退出，不发请求
-  if (st.done) $done();
-  if (expMs && Date.now() > expMs) $done();
+  // ---- 无动作退出（全部静默，不发通知不标完成）----
   if (REST_DAY && dateHash(today) % 10 === 0) $done();
+  // token 过期：若上次没提醒过这个 token，提醒一次然后记住
+  if (expMs && Date.now() > expMs) {
+    if (st.expired_notified !== tObj.token) {
+      st.expired_notified = tObj.token;
+      $persistentStore.write(JSON.stringify(st), KEY_STATE);
+      notify("Token 已过期", "请打开适马小程序刷新，之后任务自动继续");
+    }
+    $done();
+  }
+  // 触发条件：新 token，或上一轮异常结束需要重试；否则静默退出
+  if (!fresh && !st.retry) $done();
 
   const headers = {
     "Authorization": "Bearer " + tObj.token,
@@ -96,7 +103,7 @@ if (!tObj) {
         try {
           resolve(JSON.parse(data));
         } catch (e) {
-          reject(new Error("bad json: " + status));
+          reject(new Error("HTTP " + status + " 响应异常"));
         }
       };
       if (method === "GET") $httpClient.get(opt, cb);
@@ -104,71 +111,129 @@ if (!tObj) {
     });
 
   (async () => {
-    // 模拟打开小程序后先随便逛逛
-    await sleep(ri(10000, 40000));
+    const lines = [];          // 每步结果记录
+    let stopReason = "";       // 中止原因（空 = 全部执行完）
+    let retryable = false;     // 异常结束 → 下个周期自动重试
+    let endedFatal = false;    // 不可重试的致命错误（token过期等）
 
+    // 模拟打开小程序后先随便逛逛
+    await sleep(fresh ? ri(10000, 40000) : ri(3000, 15000));
+
+    // ---- 步骤1：用户信息（拿昵称，兼做 token 有效性检查）----
     let user;
     try {
       user = (await api("GET", "/Api/Users/GetUserInfo")).data;
+      lines.push("1.用户信息 OK（当前积分" + user.points_total + "）");
     } catch (e) {
       if (e.message === "token_expired") {
-        st.done = true; // 今天别再试了，等明天新 token
-        $persistentStore.write(JSON.stringify(st), KEY_STATE);
-        return finish("Token 已过期，明天打开小程序自动续");
+        endedFatal = true;
+        stopReason = "Token 已过期，请打开小程序刷新后自动重试";
+      } else {
+        stopReason = "步骤1(用户信息)失败: " + e.message;
+        retryable = true;
       }
-      return finish("网络异常: " + e.message);
+      return end();
     }
 
-    // ---- 签到 ----
-    try {
-      const sign = await api("POST", "/Api/Users/Signs", {});
-      console.log("签到 code=" + sign.code + " msg=" + sign.msg);
-    } catch (e) {
-      console.log("签到请求失败: " + e.message);
+    // ---- 步骤2：签到（每日只尝试一次）----
+    if (!st.signed) {
+      try {
+        const sign = await api("POST", "/Api/Users/Signs", {});
+        if (sign.code === 0) {
+          lines.push("2.签到 成功(+5)");
+        } else if ((sign.msg || "").indexOf("已完成") >= 0) {
+          lines.push("2.签到 今日已签过(跳过)");
+        } else {
+          lines.push("2.签到 异常: code=" + sign.code + " " + sign.msg);
+        }
+        st.signed = true; // 无论结果，今日不再尝试
+      } catch (e) {
+        if (e.message === "token_expired") { endedFatal = true; stopReason = "签到时 Token 过期"; return end(); }
+        lines.push("2.签到 网络失败: " + e.message);
+        retryable = true;   // 网络问题，下轮补签
+        // 签到失败不标记，下轮重试
+      }
+      await sleep(ri(4000, 9000));
+    } else {
+      lines.push("2.签到 今日已尝试过(跳过)");
     }
-    await sleep(ri(4000, 9000));
 
-    // ---- 拉文章列表（一页25篇足够） ----
+    // ---- 步骤3：文章列表 ----
     let articles = [];
     try {
       const d = (
         await api("POST", "/Api/Article/GetList", { pageIndex: 1, pageSize: 25 })
       ).data;
       articles = (d.item || []).filter((it) => it.id).map((it) => [it.id, it.title]);
+      lines.push("3.文章列表 OK（" + articles.length + " 篇）");
     } catch (e) {
-      console.log("文章列表失败: " + e.message);
+      if (e.message === "token_expired") { endedFatal = true; stopReason = "拉列表时 Token 过期"; return end(); }
+      lines.push("3.文章列表 失败: " + e.message);
+      stopReason = "步骤3(文章列表)失败";
+      retryable = true;
+      return end();
     }
     if (!articles.length) {
-      st.done = true;
-      $persistentStore.write(JSON.stringify(st), KEY_STATE);
-      return finish("文章列表为空，仅完成签到");
+      lines.push("3.文章列表为空（接口返回0篇）");
+      stopReason = "无文章可转发";
+      return end();
     }
 
-    // ---- 转发 SHARE_COUNT 篇：先点开(阅读)再转发 ----
-    let ok = 0;
-    for (let i = 0; i < Math.min(SHARE_COUNT, articles.length); i++) {
-      const id = articles[i][0];
-      const title = articles[i][1];
+    // ---- 步骤4：转发 SHARE_COUNT 篇 ----
+    let ok = 0, done = 0, idx = st.lastIdx || 0;
+    if (idx >= articles.length) idx = 0;
+    for (let i = 0; i < SHARE_COUNT; i++) {
+      if (idx >= articles.length) idx = 0;
+      const id = articles[idx][0];
+      const title = articles[idx][1];
+      idx++; done++;
       try {
-        await api("POST", "/Api/Article/GetDetails", { id: id });
-        await sleep(ri(6000, 16000)); // 模拟阅读
+        await api("POST", "/Api/Article/GetDetails", { id: id }); // 模拟点开阅读
+        await sleep(ri(6000, 16000));
         const r = await api("POST", "/Api/Article/Shares", {
           WorkID: id,
           WorkTitle: title,
           nickname: user.nickname,
         });
-        st.shares++;
-        console.log("转发[" + (i + 1) + "] " + title + " => code=" + r.code);
-        if (r.code === 0) ok++;
+        st.shares_total++;
+        if (r.code === 0) {
+          ok++;
+          lines.push("4." + done + " 转发OK「" + title + "」");
+        } else {
+          lines.push("4." + done + " 转发被拒[" + title + "]: " + (r.msg || "code=" + r.code));
+          // 积分已满/已完成类拒绝 → 今日没意义了，停止
+          if ((r.msg || "").indexOf("满") >= 0 || (r.msg || "").indexOf("完成") >= 0) {
+            stopReason = "第" + done + "篇被拒: " + r.msg;
+            break;
+          }
+        }
       } catch (e) {
-        console.log("转发失败: " + e.message);
+        lines.push("4." + done + " 转发失败[" + title + "]: " + e.message);
+        if (e.message === "token_expired") {
+          stopReason = "转发中 Token 过期";
+          endedFatal = true;
+        } else {
+          stopReason = "第" + done + "篇转发网络失败";
+          retryable = true;
+        }
         break;
       }
       await sleep(ri(8000, 20000));
     }
+    st.lastIdx = idx % articles.length;
 
-    st.done = true;
-    $persistentStore.write(JSON.stringify(st), KEY_STATE);
-    finish("今日完成 ✅ 签到 + 转发 " + ok + "/" + SHARE_COUNT + " 篇");
+    if (!stopReason) stopReason = "全部执行完毕";
+
+    function end() {
+      st.runs++;
+      st.token = tObj.token;
+      st.retry = retryable;      // 异常结束 → 下个周期重试；正常结束 → false
+      $persistentStore.write(JSON.stringify(st), KEY_STATE);
+      const body = lines.join("\n") + "\n——\n结束: " + stopReason
+        + (retryable ? "（下个周期自动重试）" : "");
+      notify("第" + st.runs + "轮 · 转发成功" + ok + "/" + done, body);
+      console.log("DONE: " + stopReason + "\n" + lines.join("\n"));
+      $done();
+    }
   })();
 }
