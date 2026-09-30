@@ -255,5 +255,6 @@ if (!tObj) {
       console.log("DONE: " + stopReason + "\n" + lines.join("\n"));
       $done();
     }
+    end();
   })();
 }
