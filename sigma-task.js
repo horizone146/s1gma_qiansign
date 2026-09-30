@@ -70,6 +70,7 @@ if (!tObj) {
   quitLog("存储中无 token（请先打开一次适马小程序）");
 } else {
   const st = getTodayState();
+  const fresh = st.token !== tObj.token; // token 换新 = 刚打开过小程序
   const expMs = tokenExpMs(tObj.token);
   console.log("START: state(date=" + st.date + " runs=" + st.runs + " signed=" + st.signed
     + " burst=" + String(st.last_burst_start).slice(0, 10) + ") | token捕获于 "
@@ -103,7 +104,14 @@ if (!tObj) {
   const api = (method, path, body) =>
     new Promise((resolve, reject) => {
       const opt = { url: BASE + path, headers: headers, timeout: 15000 };
+      let settled = false;
+      const to = setTimeout(() => {
+        if (!settled) { settled = true; reject(new Error("请求20秒无响应(" + path + ")")); }
+      }, 20000);
       const cb = (status, _h, data) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(to);
         if (status === "401") return reject(new Error("token_expired"));
         try {
           resolve(JSON.parse(data));
@@ -122,13 +130,16 @@ if (!tObj) {
     let endedFatal = false;    // 不可重试的致命错误（token过期等）
 
     // 模拟打开小程序后先随便逛逛
+    console.log("STEP: 延迟等待中");
     await sleep(fresh ? ri(10000, 40000) : ri(3000, 15000));
+    console.log("STEP: 开始请求用户信息");
 
     // ---- 步骤1：用户信息（拿昵称，兼做 token 有效性检查）----
     let user;
     try {
       user = (await api("GET", "/Api/Users/GetUserInfo")).data;
       lines.push("1.用户信息 OK（当前积分" + user.points_total + "）");
+      console.log("STEP: 用户信息 OK 积分" + user.points_total);
     } catch (e) {
       if (e.message === "token_expired") {
         endedFatal = true;
@@ -146,6 +157,7 @@ if (!tObj) {
         const sign = await api("POST", "/Api/Users/Signs", {});
         if (sign.code === 0) {
           lines.push("2.签到 成功(+5)");
+        console.log("STEP: 签到成功");
         } else if ((sign.msg || "").indexOf("已完成") >= 0) {
           lines.push("2.签到 今日已签过(跳过)");
         } else {
@@ -171,6 +183,7 @@ if (!tObj) {
       ).data;
       articles = (d.item || []).filter((it) => it.id).map((it) => [it.id, it.title]);
       lines.push("3.文章列表 OK（" + articles.length + " 篇）");
+      console.log("STEP: 文章列表 " + articles.length + " 篇");
     } catch (e) {
       if (e.message === "token_expired") { endedFatal = true; stopReason = "拉列表时 Token 过期"; return end(); }
       lines.push("3.文章列表 失败: " + e.message);
@@ -204,6 +217,7 @@ if (!tObj) {
         if (r.code === 0) {
           ok++;
           lines.push("4." + done + " 转发OK「" + title + "」");
+          console.log("STEP: 转发" + done + "/" + SHARE_COUNT + " OK");
         } else {
           lines.push("4." + done + " 转发被拒[" + title + "]: " + (r.msg || "code=" + r.code));
           // 积分已满/已完成类拒绝 → 今日没意义了，停止
